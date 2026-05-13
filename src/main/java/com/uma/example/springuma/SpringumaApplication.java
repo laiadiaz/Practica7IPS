@@ -30,4 +30,11 @@ public class SpringumaApplication {
         return new CorsFilter(source);
     }
 
+    @RestController
+    class VersionController {
+        @GetMapping("/version")
+        public String version() {
+            return "Springuma v2.0 - desplegado por CI/CD";
+        }
+    }
 }
