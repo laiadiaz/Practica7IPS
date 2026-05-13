@@ -97,8 +97,7 @@ jobs:
     name: 🚀 Deploy to Kubernetes
     needs: build-and-push        # Solo corre si el Job 1 tuvo éxito
     runs-on: self-hosted          # ← Runner local con acceso al clúster K8s
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
+    if: github.ref == 'refs/heads/main'
     steps:
       # 1. Obtener código (para tener los manifiestos de k8s/)
       - name: Checkout repository
