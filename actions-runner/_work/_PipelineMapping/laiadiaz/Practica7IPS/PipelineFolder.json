@@ -1,0 +1,12 @@
+﻿{
+  "repositoryName": "laiadiaz/Practica7IPS",
+  "pipelineDirectory": "Practica7IPS",
+  "workspaceDirectory": "Practica7IPS\\Practica7IPS",
+  "repositories": {
+    "laiadiaz/Practica7IPS": {
+      "repositoryPath": "Practica7IPS\\Practica7IPS",
+      "lastRunOn": "05/13/2026 04:44:44 +02:00"
+    }
+  },
+  "lastRunOn": "05/13/2026 04:46:21 +02:00"
+}
