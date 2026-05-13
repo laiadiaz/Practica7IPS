@@ -1,65 +1,50 @@
 name: CI/CD – Springuma Hospital App
 
-# ── Trigger ───────────────────────────────────────────────────────────────────
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch:   # Permite lanzar el workflow manualmente desde GitHub UI
+  workflow_dispatch:
 
-# ── Variables globales ────────────────────────────────────────────────────────
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   IMAGE_NAME: practica7ips
   K8S_DEPLOYMENT: springuma-deployment
   K8S_NAMESPACE: default
-  
+
 jobs:
-  # ════════════════════════════════════════════════════════════════════════════
-  # JOB 1 — Build, Test & Push Docker image
-  # Corre en GitHub-hosted runner (ubuntu-latest) — NO necesita runner local
-  # ════════════════════════════════════════════════════════════════════════════
   build-and-push:
     name: 🔨 Build · Test · Push
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Obtener el código del repositorio
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Configurar JDK 21 (mismo que el pom.xml del proyecto)
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven           # Cachea ~/.m2 entre ejecuciones → más rápido
+          cache: maven
 
-      # 3. Compilar y ejecutar tests de integración con Maven
       - name: Build & run tests (Maven)
-        run: mvn verify -q       # 'verify' ejecuta compile + test + integration-test
+        run: mvn verify -q
 
-      # 4. Subir informe JaCoCo como artefacto (visible en la pestaña Actions)
       - name: Upload JaCoCo coverage report
         uses: actions/upload-artifact@v4
-        if: always()             # Se sube aunque fallen los tests
+        if: always()
         with:
           name: jacoco-report
           path: target/site/jacoco/
 
-      # 5. Login en Docker Hub usando los secretos configurados en el repositorio
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 6. Generar metadatos/tags para la imagen Docker
-      #    Tags generados:
-      #      - latest  (siempre)
-      #      - sha-<git-short-sha>  (trazabilidad, ej: sha-a1b2c3d)
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -69,75 +54,49 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=sha-,format=short
 
-      # 7. Construir imagen Docker multi-stage y publicar en Docker Hub
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}  # No push en PRs
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      # 8. Exportar el SHA corto para usarlo en el job de deploy
       - name: Export image SHA tag
         id: tag
         run: echo "sha_tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-    # Exponer el SHA tag al job siguiente
     outputs:
       sha_tag: ${{ steps.tag.outputs.sha_tag }}
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # JOB 2 — Deploy en Kubernetes local
-  # REQUISITO: self-hosted runner instalado como servicio en la máquina local
-  #            donde corre Minikube/Kind/k3s con acceso a kubectl
-  # ════════════════════════════════════════════════════════════════════════════
   deploy:
     name: 🚀 Deploy to Kubernetes
-    needs: build-and-push        # Solo corre si el Job 1 tuvo éxito
-    runs-on: self-hosted          # ← Runner local con acceso al clúster K8s
+    needs: build-and-push
+    runs-on: self-hosted
     if: github.ref == 'refs/heads/main'
+
     steps:
-      # 1. Obtener código (para tener los manifiestos de k8s/)
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Actualizar la imagen del Deployment con el nuevo tag SHA
-      #    Esto provoca el rolling update sin downtime
       - name: Update Deployment image tag
-        run: |
-          kubectl set image deployment/${{ env.K8S_DEPLOYMENT }} \
-            springuma=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.sha_tag }} \
-            --namespace ${{ env.K8S_NAMESPACE }}
+        run: kubectl set image deployment/${{ env.K8S_DEPLOYMENT }} springuma=${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.sha_tag }} --namespace ${{ env.K8S_NAMESPACE }}
 
-      # 3. Aplicar manifiestos para reflejar cambios en YAML (idempotente)
       - name: Apply Kubernetes manifests
-        run: |
-          kubectl apply -f k8s/deployment.yaml --namespace ${{ env.K8S_NAMESPACE }}
-          kubectl apply -f k8s/service.yaml    --namespace ${{ env.K8S_NAMESPACE }}
+        run: kubectl apply -f k8s/deployment.yaml --namespace ${{ env.K8S_NAMESPACE }}
 
-      # 4. Esperar a que el rolling update termine correctamente (máx. 3 min)
+      - name: Apply Kubernetes service
+        run: kubectl apply -f k8s/service.yaml --namespace ${{ env.K8S_NAMESPACE }}
+
       - name: Wait for rollout to complete
-        run: |
-          kubectl rollout status deployment/${{ env.K8S_DEPLOYMENT }} \
-            --namespace ${{ env.K8S_NAMESPACE }} \
-            --timeout=180s
+        run: kubectl rollout status deployment/${{ env.K8S_DEPLOYMENT }} --namespace ${{ env.K8S_NAMESPACE }} --timeout=180s
 
-      # 5. Mostrar estado final del clúster para verificación
-      - name: Show deployment status
-        run: |
-          echo "════════════════════════════════════════"
-          echo "  ✅ Deploy completado"
-          echo "════════════════════════════════════════"
-          echo ""
-          echo "  📦 Pods en ejecución:"
-          kubectl get pods -l app=springuma --namespace ${{ env.K8S_NAMESPACE }}
-          echo ""
-          echo "  🌐 Service expuesto:"
-          kubectl get svc springuma-service --namespace ${{ env.K8S_NAMESPACE }}
-          echo ""
-          echo "  🏷️  Imagen desplegada:"
-          kubectl describe deployment/${{ env.K8S_DEPLOYMENT }} \
-            --namespace ${{ env.K8S_NAMESPACE }} | grep "Image:"
-          echo "════════════════════════════════════════"
+      - name: Show pods
+        run: kubectl get pods -l app=springuma --namespace ${{ env.K8S_NAMESPACE }}
+
+      - name: Show service
+        run: kubectl get svc springuma-service --namespace ${{ env.K8S_NAMESPACE }}
+
+      - name: Show deployed image
+        run: kubectl describe deployment/${{ env.K8S_DEPLOYMENT }} --namespace ${{ env.K8S_NAMESPACE }}
